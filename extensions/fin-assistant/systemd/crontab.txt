@@ -1,0 +1,103 @@
+# Financial Assistant — crontab
+# Install with: crontab systemd/crontab.txt
+#
+# All times in UTC (IST = UTC+5:30)
+# Market hours: 9:15 AM – 3:30 PM IST  =  3:45 AM – 10:00 AM UTC  Mon-Fri
+
+# -- Startup recovery (WSL2 wake) ---------------------------------------------
+# Fires 20s after every WSL2 instance start.
+# Restarts bridge (network stack resets on wake), runs any missed overnight jobs
+# (NSE symbol refresh, weekly scorecard, preopen if woke late).
+@reboot sleep 20 && cd /root/fin-assistant && /usr/bin/bash scripts/startup.sh >> logs/startup.log 2>&1
+
+# ── Scheduled reports ────────────────────────────────────────────────────────
+
+# Pre-open briefing at 8:45 AM IST (3:15 AM UTC)
+15 3 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh preopen /usr/bin/python3 main.py preopen >> logs/cron.log 2>&1
+
+# Hourly index scans: 9:45, 10:45 ... 15:15 IST  (3:15-9:15 UTC)
+45 3,4,5,6,7,8,9 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh hourly_indices /usr/bin/python3 main.py hourly >> logs/cron.log 2>&1
+
+# Hourly stocks scans: 9:50, 10:50 ... 15:20 IST  (5 min after indices)
+50 3,4,5,6,7,8,9 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh hourly_stocks /usr/bin/python3 main.py hourly --mode stocks >> logs/cron_stocks.log 2>&1
+
+# Hourly futures scans: 9:55, 10:55 ... 15:25 IST  (10 min after indices)
+55 3,4,5,6,7,8,9 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh hourly_futures /usr/bin/python3 main.py hourly --mode futures >> logs/cron_futures.log 2>&1
+
+# EOD grader at 3:45 PM IST (10:15 AM UTC)
+15 10 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh eod /usr/bin/python3 main.py eod >> logs/cron.log 2>&1
+
+# Weekly scorecard Monday 8:00 AM IST (2:30 AM UTC)
+30 2 * * 1 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh weekly /usr/bin/python3 main.py weekly >> logs/cron.log 2>&1
+
+# -- Memory backup fallback ---------------------------------------------------
+# Runs once at 4:45 PM IST (11:15 AM UTC). The systemd watcher
+# (memory-watcher.service) handles real-time backup; this cron is the
+# fallback if the watcher is not running.
+15 11 * * * cd /root/fin-assistant && /usr/bin/bash scripts/memory_backup.sh >> logs/memory_backup.log 2>&1
+
+# -- Daily backup -------------------------------------------------------------
+
+# Every day at 11:30 PM IST (18:00 UTC) — after EOD, before midnight
+# Backs up DB + .env + session; uploads to Google Drive if rclone configured
+0 18 * * * cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh backup /usr/bin/bash scripts/backup.sh >> logs/backup.log 2>&1
+
+# -- Automated tests ----------------------------------------------------------
+
+# Every 30 minutes, any time of day.
+# run_tests.sh has its own guards: skips if already ran today, defers during
+# market hours (9:00–15:45 IST). First slot after market close fires the suite.
+# On failure: test_debug_agent.sh (haiku) adds structured diagnosis to Telegram.
+*/30 * * * * cd /root/fin-assistant && /usr/bin/bash scripts/run_tests.sh >> logs/tests.log 2>&1
+
+# Weekly coverage gap check — Sunday 8:00 PM IST (14:30 UTC)
+# Finds changed .py files with no corresponding test file; sends Telegram summary.
+30 14 * * 0 cd /root/fin-assistant && /usr/bin/bash scripts/coverage_agent.sh >> logs/coverage_agent.log 2>&1
+
+# -- Watchdog: catches and re-runs any missed critical job --------------------
+
+# Every 30 minutes during the market day (2:00-12:00 AM UTC = 7:30 AM-5:30 PM IST)
+# Extended to 5:30 PM IST to catch AMC report recovery (check fires after 5:15 PM)
+# Checks heartbeats; re-runs preopen/hourly indices+stocks+futures/eod/amc_report
+*/30 2-12 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/watchdog.sh >> logs/watchdog.log 2>&1
+
+# -- Intraday price monitor ---------------------------------------------------
+
+# Every 5 minutes during market hours Mon-Fri (3:15-10:00 AM UTC = 9:15-3:30 PM IST)
+# Alerts immediately on target hit or SL breach for any open signal
+# Wrapped in cron_guard for flock (prevents pile-up if NSE is slow)
+*/5 3-10 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh price_monitor /usr/bin/python3 scripts/price_monitor.py >> logs/price_monitor.log 2>&1
+
+# -- Health checks ------------------------------------------------------------
+
+# Every 15 minutes during market hours Mon–Fri (3:30–10:15 AM UTC = 9:00–3:45 PM IST)
+# Alerts Telegram immediately on any failure; auto-restarts fin-bridge if down
+*/15 3-10 * * 1-5 cd /root/fin-assistant && /usr/bin/python3 scripts/healthcheck.py >> logs/healthcheck.log 2>&1
+
+# Every 2 hours outside market hours (nights, weekends) — lower frequency is fine
+0 */2 * * * cd /root/fin-assistant && /usr/bin/python3 scripts/healthcheck.py >> logs/healthcheck.log 2>&1
+
+# -- NSE symbol list refresh --------------------------------------------------
+
+# Daily at 7:30 AM IST (2:00 AM UTC) — before pre-open briefing
+# Downloads EQUITY_L.csv from NSE archives, upserts into nse_symbols table
+0 2 * * 1-5 cd /root/fin-assistant && /usr/bin/python3 scripts/refresh_nse_symbols.py >> logs/nse_symbols.log 2>&1
+
+# -- AMC bulk/block deal report -----------------------------------------------
+
+# Primary run: 4:15 PM IST (10:45 AM UTC) — after market close, deals confirmed
+45 10 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh amc_report /usr/bin/python3 main.py amc-report >> logs/amc_report.log 2>&1
+
+# Hourly retry: 5:15, 6:15, 7:15 PM IST (11:45 AM, 12:45 PM, 1:45 PM UTC)
+# cron_guard skips if heartbeat already set (i.e., ran successfully today)
+15 11,12,13 * * 1-5 cd /root/fin-assistant && /usr/bin/bash scripts/cron_guard.sh amc_report /usr/bin/python3 main.py amc-report >> logs/amc_report.log 2>&1
+
+# -- Channel scout ------------------------------------------------------------
+
+# Daily at 7:00 PM IST (13:30 UTC) — after market close, scrapes public forums
+# for newly mentioned Telegram trading channels. Results go to CHANNEL_SCOUT.md.
+30 13 * * * cd /root/fin-assistant && /usr/bin/python3 scripts/channel_scout.py >> logs/channel_scout.log 2>&1
+
+# Full status report every weekday morning at 8:30 AM IST (3:00 AM UTC)
+# Sends OK summary to Telegram so you know the stack is alive before market opens
+0 3 * * 1-5 cd /root/fin-assistant && /usr/bin/python3 scripts/healthcheck.py --report >> logs/healthcheck.log 2>&1
