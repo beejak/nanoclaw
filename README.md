@@ -80,6 +80,16 @@ The installer handles everything -- dependencies, credentials, database, service
 
 ---
 
+## Security
+
+| Date | Severity | Component | Details |
+|---|---|---|---|
+| 2026-04-20 | High | Frontend build toolchain | Fixed 3 Vite CVEs ([GHSA-p9ff-h696-f583](https://github.com/advisories/GHSA-p9ff-h696-f583), [GHSA-v2wj-q39q-566r](https://github.com/advisories/GHSA-v2wj-q39q-566r), [GHSA-4w7w-66w2-5vf9](https://github.com/advisories/GHSA-4w7w-66w2-5vf9)) via `npm audit fix`. All path traversal vulnerabilities resolved. |
+
+To check for new dependency vulnerabilities: `npm audit`
+
+---
+
 ## Table of Contents
 
 <details>
@@ -109,8 +119,9 @@ The installer handles everything -- dependencies, credentials, database, service
 12. [Database Schema](#database-schema)
 13. [Failover & Redundancy](#failover--redundancy)
 14. [Limitations](#limitations)
-15. [Contributing](#contributing)
-16. [License](#license)
+15. [Security](#security)
+16. [Contributing](#contributing)
+17. [License](#license)
 
 </details>
 
